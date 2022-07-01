@@ -22,6 +22,7 @@ const DefaultTimeout = 20 * time.Minute
 // 1. Pipeline clusters include a `Label` field.
 // 2. Spark version is not required (and shouldn't be specified) for pipeline clusters.
 // 3. num_workers is optional, and there is no single-node support for pipelines clusters.
+// When adding new attributes, also modify the isEmptyClusterStruct function below
 type pipelineCluster struct {
 	Label string `json:"label,omitempty"` // used only by pipelines
 
@@ -126,8 +127,30 @@ func NewPipelinesAPI(ctx context.Context, m interface{}) PipelinesAPI {
 	return PipelinesAPI{m.(*common.DatabricksClient), ctx}
 }
 
+func isEmptyClusterStruct(x pipelineCluster) bool {
+	// alternatively we can use https://github.com/google/go-cmp to compare with empty struct
+	res := (x.Label == "" && x.NumWorkers == 0 && x.Autoscale == nil && x.NodeTypeID == "" && x.DriverNodeTypeID == "" &&
+		x.InstancePoolID == "" && x.DriverInstancePoolID == "" && x.AwsAttributes == nil && x.GcpAttributes == nil &&
+		len(x.SparkConf) == 0 && len(x.SparkEnvVars) == 0 && len(x.CustomTags) == 0 && len(x.SSHPublicKeys) == 0 &&
+		len(x.InitScripts) == 0 && x.ClusterLogConf == nil)
+	return res
+}
+
+func sanitizePipeline(s pipelineSpec) pipelineSpec {
+	tmp := []pipelineCluster{}
+	for _, x := range s.Clusters {
+		if !isEmptyClusterStruct(x) {
+			tmp = append(tmp, x)
+		}
+	}
+	s.Clusters = tmp
+	// TODO: maybe we'll need to do something for libraries as well?
+	return s
+}
+
 func (a PipelinesAPI) Create(s pipelineSpec, timeout time.Duration) (string, error) {
 	var resp createPipelineResponse
+	s = sanitizePipeline(s)
 	err := a.client.Post(a.ctx, "/pipelines", s, &resp)
 	if err != nil {
 		return "", err
@@ -153,6 +176,7 @@ func (a PipelinesAPI) Read(id string) (p PipelineInfo, err error) {
 }
 
 func (a PipelinesAPI) Update(id string, s pipelineSpec, timeout time.Duration) error {
+	s = sanitizePipeline(s)
 	err := a.client.Put(a.ctx, "/pipelines/"+id, s)
 	if err != nil {
 		return err
